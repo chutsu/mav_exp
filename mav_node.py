@@ -18,6 +18,7 @@ from geometry_msgs.msg import PoseStamped
 from mavros_msgs.msg import State
 from mavros_msgs.msg import Thrust
 from mavros_msgs.msg import ParamValue
+from mavros_msgs.msg import AttitudeTarget
 from mavros_msgs.srv import ParamSet
 from mavros_msgs.srv import CommandBool
 from mavros_msgs.srv import CommandBoolRequest
@@ -36,7 +37,7 @@ def clip_value(x, vmin, vmax):
 def quat_norm(q):
   """ Returns norm of a quaternion """
   qw, qx, qy, qz = q
-  return sqrt(qw**2 + qx**2 + qy**2 + qz**2)
+  return np.sqrt(qw**2 + qx**2 + qy**2 + qz**2)
 
 
 def quat_normalize(q):
@@ -151,7 +152,7 @@ def euler2quat(yaw, pitch, roll):
   qy = c_psi * s_theta * c_phi + s_psi * c_theta * s_phi
   qz = s_psi * c_theta * c_phi - c_psi * s_theta * s_phi
 
-  mag = sqrt(qw**2 + qx**2 + qy**2 + qz**2)
+  mag = np.sqrt(qw**2 + qx**2 + qy**2 + qz**2)
   return np.array([qw / mag, qx / mag, qy / mag, qz / mag])
 
 
@@ -708,8 +709,8 @@ class MavNode:
     topic_param_set = "/mavros/param/set"
     topic_pose = "/mavros/local_position/pose"
     topic_pos_set = "/mavros/setpoint_position/local"
-    topic_att_set = "/mavros/setpoint_attitude/attitude"
-    topic_thr_set = "/mavros/setpoint_attitude/thrust"
+    topic_att_set = "/mavros/setpoint_raw/attitude"
+    # topic_thr_set = "/mavros/setpoint_attitude/thrust"
     topic_mocap = "/vicon/srl_mav/srl_mav"
 
     # Create service proxies
@@ -724,12 +725,12 @@ class MavNode:
     # self.sub_mocap = sub_init(PoseStamped, topic_mocap, self.mocap_cb, 1)
 
     # Create publishers
-    self.pub_pos_set = rospy.Publisher(topic_pos_set, PoseStamped)
-    self.pub_att_set = rospy.Publisher(topic_att_set, PoseStamped)
-    self.pub_thr_set = rospy.Publisher(topic_thr_set, Thrust)
+    self.pub_pos_set = rospy.Publisher(topic_pos_set, PoseStamped, queue_size=10)
+    self.pub_att_set = rospy.Publisher(topic_att_set, AttitudeTarget, queue_size=10)
+    # self.pub_att_set = rospy.Publisher(topic_att_set, PoseStamped)
+    # self.pub_thr_set = rospy.Publisher(topic_thr_set, Thrust)
 
     # State
-    self.local_pose = None
     self.state = None
     self.mode = MavMode.START
     self.ts = None
@@ -832,26 +833,30 @@ class MavNode:
 
   def pose_cb(self, msg):
     """Callback function for msg topic subscriber."""
-    self.local_pose = msg
     self.ts = msg.header.stamp.to_nsec()
+    dt = float((self.ts - self.ts_prev) * 1e-9) if self.ts_prev else 0.0
+    self.ts_prev = self.ts
 
-    px = msg.pose.position.x
-    py = msg.pose.position.y
-    pz = msg.pose.position.z
-    self.pos = np.array([px, py, pz])
-
+    rx = msg.pose.position.x
+    ry = msg.pose.position.y
+    rz = msg.pose.position.z
     qw = msg.pose.orientation.w
     qx = msg.pose.orientation.x
     qy = msg.pose.orientation.y
     qz = msg.pose.orientation.z
-    q = np.array([qw, qx, qy, qz])
-    ypr = quat2euler(q)
+    pos = np.array([rx, ry, rz])
+    quat = np.array([qw, qx, qy, qz])
 
-    self.heading = ypr[0]
-    if self.heading > np.pi:
-      self.heading -= 2.0 * np.pi
-    elif self.heading < -np.pi:
-      self.heading += 2.0 * np.pi
+    if self.filter.update(pos, dt):
+      self.pos = self.filter.get_position()
+      self.vel = self.filter.get_velocity()
+
+      ypr = quat2euler(quat)
+      self.heading = ypr[0]
+      if self.heading > np.pi:
+        self.heading -= 2.0 * np.pi
+      elif self.heading < -np.pi:
+        self.heading += 2.0 * np.pi
 
   def mocap_cb(self, msg):
     """Mocap callback"""
@@ -926,26 +931,42 @@ class MavNode:
     rospy.loginfo("Land!")
 
   def pub_attitude_sp(self, roll, pitch, yaw, thrust):
-    yaw_sp = deg2rad(90.0) - yaw
+    yaw_sp = yaw
     if yaw_sp >= np.pi:
       yaw_sp -= 2.0 * np.pi
     elif yaw_sp <= -np.pi:
       yaw_sp += 2.0 * np.pi
 
-    qw, qx, qy, qz = quat_normalize(euler2quat(yaw_sp, pitch, roll)).tolist()
-    msg = PoseStamped()
-    msg.pose.position.x = 0.0
-    msg.pose.position.y = 0.0
-    msg.pose.position.z = 0.0
-    msg.pose.orientation.w = qw
-    msg.pose.orientation.x = qx
-    msg.pose.orientation.y = qy
-    msg.pose.orientation.z = qz
-    self.pub_att.publish(msg)
+    # qw, qx, qy, qz = quat_normalize(euler2quat(yaw_sp, pitch, roll)).tolist()
+    # msg = PoseStamped()
+    # msg.pose.position.x = 0.0
+    # msg.pose.position.y = 0.0
+    # msg.pose.position.z = 0.0
+    # msg.pose.orientation.w = qw
+    # msg.pose.orientation.x = qx
+    # msg.pose.orientation.y = qy
+    # msg.pose.orientation.z = qz
 
-    msg = Thrust()
+    qw, qx, qy, qz = quat_normalize(euler2quat(yaw_sp, pitch, roll)).tolist()
+
+    msg = AttitudeTarget()
+    msg.header.stamp = rospy.Time.now()
+    msg.header.frame_id = "fcu"
+    msg.type_mask = AttitudeTarget.IGNORE_ROLL_RATE
+    msg.type_mask += AttitudeTarget.IGNORE_PITCH_RATE
+    msg.type_mask += AttitudeTarget.IGNORE_YAW_RATE
+
+    msg.orientation.w = qw
+    msg.orientation.x = qx
+    msg.orientation.y = qy
+    msg.orientation.z = qz
     msg.thrust = thrust
-    self.pub_thr.publish(msg)
+
+    self.pub_att_set.publish(msg)
+
+    # msg = Thrust()
+    # msg.thrust = thrust
+    # self.pub_thr_set.publish(msg)
 
   def execute_velocity_control_test(self):
     # Process variables
@@ -1217,8 +1238,8 @@ if __name__ == '__main__':
   # Run Mav Node
   rospy.init_node("mav_node")
   node = MavNode(sim_mode=args.sim_mode)
-  rospy.loginfo("Sending position setpoint!")
 
+  # rospy.loginfo("Sending position setpoint!")
   # rate = rospy.Rate(20)
   # pose = PoseStamped()
   # pose.pose.position.x = 0
@@ -1227,5 +1248,9 @@ if __name__ == '__main__':
   # while (not rospy.is_shutdown()):
   #   node.pub_pos_set.publish(pose)
   #   rate.sleep()
-  node.execute_velocity_control_test()
-  rospy.spin()
+
+  rate = rospy.Rate(100)
+  while (not rospy.is_shutdown()):
+    node.execute_velocity_control_test()
+    # node.pub_attitude_sp(0.0, 0.0, 0.0, 1.0)
+    rate.sleep()
