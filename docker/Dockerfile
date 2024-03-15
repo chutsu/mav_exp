@@ -135,5 +135,5 @@ USER ${USER}
 
 # Entry point script
 WORKDIR $HOME
-COPY entry.sh /
-ENTRYPOINT ["/entry.sh"]
+COPY entry.sh .
+ENTRYPOINT ["/home/docker/entry.sh"]
