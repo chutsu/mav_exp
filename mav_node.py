@@ -15,6 +15,7 @@ import matplotlib.pylab as plt
 
 import rospy
 from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import TwistStamped
 from mavros_msgs.msg import State
 from mavros_msgs.msg import Thrust
 from mavros_msgs.msg import ParamValue
@@ -335,10 +336,10 @@ class MavVelocityControl:
   def __init__(self):
     self.period = 0.0049  # [s]
     self.dt = 0
-    self.pid_vx = PID(1.0, 0.0, 0.05)
-    self.pid_vy = PID(1.0, 0.0, 0.05)
-    self.pid_vz = PID(1.0, 0.0, 0.05)
-    self.hover_thrust = 0.7
+    self.pid_vx = PID(0.5, 0.0, 0.5)
+    self.pid_vy = PID(0.5, 0.0, 0.5)
+    self.pid_vz = PID(0.5, 0.0, 0.5)
+    self.hover_thrust = 0.6
     self.u = [0.0, 0.0, 0.0, 0.0]  # roll, pitch, yaw, thrust
 
   def update(self, sp, pv, dt):
@@ -409,7 +410,7 @@ class MavPositionControl:
 
       self.pid_x = PID(1.0, 0.0, 0.1)
       self.pid_y = PID(1.0, 0.0, 0.1)
-      self.pid_z = PID(0.1, 0.0, 0.0)
+      self.pid_z = PID(0.5, 0.0, 0.5)
 
     else:
       raise NotImplementedError()
@@ -708,9 +709,9 @@ class MavNode:
     topic_state = "/mavros/state"
     topic_param_set = "/mavros/param/set"
     topic_pose = "/mavros/local_position/pose"
+    topic_vel = "/mavros/local_position/velocity"
     topic_pos_set = "/mavros/setpoint_position/local"
     topic_att_set = "/mavros/setpoint_raw/attitude"
-    # topic_thr_set = "/mavros/setpoint_attitude/thrust"
     topic_mocap = "/vicon/srl_mav/srl_mav"
 
     # Create service proxies
@@ -721,14 +722,15 @@ class MavNode:
 
     # Create subscribers
     self.sub_state = rospy.Subscriber(topic_state, State, self.state_cb)
-    self.sub_pose = rospy.Subscriber(topic_pose, PoseStamped, self.pose_cb)
-    # self.sub_mocap = sub_init(PoseStamped, topic_mocap, self.mocap_cb, 1)
+    if self.sim_mode:
+      self.sub_pose = rospy.Subscriber(topic_pose, PoseStamped, self.pose_cb)
+      # self.sub_vel = rospy.Subscriber(topic_vel, TwistStamped, self.vel_cb)
+    else:
+      self.sub_mocap = rospy.Subscriber(topic_mocap, PoseStamped, self.mocap_cb)
 
     # Create publishers
     self.pub_pos_set = rospy.Publisher(topic_pos_set, PoseStamped, queue_size=10)
     self.pub_att_set = rospy.Publisher(topic_att_set, AttitudeTarget, queue_size=10)
-    # self.pub_att_set = rospy.Publisher(topic_att_set, PoseStamped)
-    # self.pub_thr_set = rospy.Publisher(topic_thr_set, Thrust)
 
     # State
     self.state = None
@@ -737,7 +739,7 @@ class MavNode:
     self.ts_prev = None
     self.pos = None
     self.vel = None
-    self.heading = 0.0
+    self.heading = None
     self.traj_start = None
     self.hover_start = None
     self.tune_start = None
@@ -847,6 +849,14 @@ class MavNode:
     pos = np.array([rx, ry, rz])
     quat = np.array([qw, qx, qy, qz])
 
+    # self.pos = pos
+    # ypr = quat2euler(quat)
+    # self.heading = ypr[0]
+    # if self.heading > np.pi:
+    #   self.heading -= 2.0 * np.pi
+    # elif self.heading < -np.pi:
+    #   self.heading += 2.0 * np.pi
+
     if self.filter.update(pos, dt):
       self.pos = self.filter.get_position()
       self.vel = self.filter.get_velocity()
@@ -857,6 +867,13 @@ class MavNode:
         self.heading -= 2.0 * np.pi
       elif self.heading < -np.pi:
         self.heading += 2.0 * np.pi
+
+  # def vel_cb(self, msg):
+  #   """ Velocity callback """
+  #   vx = msg.twist.linear.x
+  #   vy = msg.twist.linear.y
+  #   vz = msg.twist.linear.z
+  #   self.vel = np.array([vx, vy, vz])
 
   def mocap_cb(self, msg):
     """Mocap callback"""
@@ -931,172 +948,168 @@ class MavNode:
     rospy.loginfo("Land!")
 
   def pub_attitude_sp(self, roll, pitch, yaw, thrust):
+    # Form attitude setpoint
     yaw_sp = yaw
     if yaw_sp >= np.pi:
       yaw_sp -= 2.0 * np.pi
     elif yaw_sp <= -np.pi:
       yaw_sp += 2.0 * np.pi
+    quat_sp = quat_normalize(euler2quat(yaw_sp, pitch, roll))
 
-    # qw, qx, qy, qz = quat_normalize(euler2quat(yaw_sp, pitch, roll)).tolist()
-    # msg = PoseStamped()
-    # msg.pose.position.x = 0.0
-    # msg.pose.position.y = 0.0
-    # msg.pose.position.z = 0.0
-    # msg.pose.orientation.w = qw
-    # msg.pose.orientation.x = qx
-    # msg.pose.orientation.y = qy
-    # msg.pose.orientation.z = qz
-
-    qw, qx, qy, qz = quat_normalize(euler2quat(yaw_sp, pitch, roll)).tolist()
-
+    # Form Attitude Target message
     msg = AttitudeTarget()
     msg.header.stamp = rospy.Time.now()
     msg.header.frame_id = "fcu"
     msg.type_mask = AttitudeTarget.IGNORE_ROLL_RATE
     msg.type_mask += AttitudeTarget.IGNORE_PITCH_RATE
     msg.type_mask += AttitudeTarget.IGNORE_YAW_RATE
-
-    msg.orientation.w = qw
-    msg.orientation.x = qx
-    msg.orientation.y = qy
-    msg.orientation.z = qz
+    msg.orientation.w = quat_sp[0]
+    msg.orientation.x = quat_sp[1]
+    msg.orientation.y = quat_sp[2]
+    msg.orientation.z = quat_sp[3]
     msg.thrust = thrust
 
+    # Publish
     self.pub_att_set.publish(msg)
 
-    # msg = Thrust()
-    # msg.thrust = thrust
-    # self.pub_thr_set.publish(msg)
-
-  def execute_velocity_control_test(self):
+  def test_velocity_control(self):
     # Process variables
     pos_pv = [self.pos[0], self.pos[1], self.pos[2], self.heading]
     vel_pv = [self.vel[0], self.vel[1], self.vel[2], self.heading]
 
-    if self.mode == MavMode.START:
-      # Start hover timer
-      if self.hover_start is None:
-        self.hover_start = self.ts
+    # if self.mode == MavMode.START:
+    #   # Start hover timer
+    #   if self.hover_start is None:
+    #     self.hover_start = self.ts
 
-      # Get hover point
-      self.pos_sp = [0.0, 0.0, self.takeoff_height, self.yaw_sp]
+    #   # Get hover point
+    #   self.pos_sp = [0.0, 0.0, self.takeoff_height, self.yaw_sp]
 
-      # Update position controller
-      vel_sp = self.pos_ctrl.update(self.pos_sp, pos_pv, self.dt)
-      u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
-      self.pub_attitude_sp(u[0], u[1], u[2], u[3])
+    #   # Update position controller
+    #   vel_sp = self.pos_ctrl.update(self.pos_sp, pos_pv, self.dt)
+    #   u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
+    #   self.pub_attitude_sp(u[0], u[1], u[2], u[3])
 
-      # Transition to land?
-      hover_time = float(self.ts - self.hover_start) * 1e-9
-      dx = self.pos[0] - self.pos_sp[0]
-      dy = self.pos[1] - self.pos_sp[1]
-      dz = self.pos[2] - self.pos_sp[2]
-      dpos = np.sqrt(dx * dx + dy * dy + dz * dz)
-      dyaw = np.fabs(self.heading - self.yaw_sp)
-      if dpos < 0.2 and dyaw < np.deg2rad(10.0) and hover_time > 3.0:
-        self.get_logger().info('TRANSITION TO TUNE!')
-        self.mode = MavMode.TUNE
-        self.hover_start = None
+    #   # Transition to land?
+    #   hover_time = float(self.ts - self.hover_start) * 1e-9
+    #   dx = self.pos[0] - self.pos_sp[0]
+    #   dy = self.pos[1] - self.pos_sp[1]
+    #   dz = self.pos[2] - self.pos_sp[2]
+    #   dpos = np.sqrt(dx * dx + dy * dy + dz * dz)
+    #   dyaw = np.fabs(self.heading - self.yaw_sp)
+    #   if dpos < 0.2 and dyaw < np.deg2rad(10.0) and hover_time > 3.0:
+    #     rospy.loginfo('TRANSITION TO TUNE!')
+    #     self.mode = MavMode.TUNE
+    #     self.hover_start = None
 
-    elif self.mode == MavMode.TUNE:
-      # Start hover timer
-      if self.tune_start is None:
-        self.tune_start = self.ts
+    # elif self.mode == MavMode.TUNE:
 
-      # Velocity controller
-      vel_sp = self.vel_tune_setpoints[0]
-      u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
-      self.pub_attitude_sp(u[0], u[1], u[2], u[3])
+    # Start hover timer
+    # if self.tune_start is None:
+    #   self.tune_start = self.ts
 
-      # Check if position setpoint reached
-      tune_time = float(self.ts - self.tune_start) * 1e-9
-      if tune_time >= 2.0:
-        self.get_logger().info('BACK TO START!')
-        self.mode = MavMode.START
-        self.vel_tune_setpoints.pop(0)
-        self.tune_start = None
-        self.hover_start = None
+    # Velocity controller
+    # vel_sp = self.vel_tune_setpoints[0]
+    vel_sp = [0.0, 0.2, +0.2, 0.0]
+    u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
+    self.pub_attitude_sp(u[0], u[1], u[2], u[3])
 
-      # Land?
-      if len(self.vel_tune_setpoints) == 0:
-        self.mode = MavMode.LAND
-        self.tune_start = None
+    # Check if position setpoint reached
+    # tune_time = float(self.ts - self.tune_start) * 1e-9
+    # if tune_time >= 2.0:
+    #   rospy.loginfo('BACK TO START!')
+    #   self.mode = MavMode.START
+    #   self.vel_tune_setpoints.pop(0)
+    #   self.tune_start = None
+    #   self.hover_start = None
 
-    elif self.mode == MavMode.LAND:
-      # Dis-armed?
-      if self.status.arming_state == VehicleStatus.ARMING_STATE_DISARMED:
-        self.stop_node()
-        return
+    # Land?
+    # if len(self.vel_tune_setpoints) == 0:
+    #   self.mode = MavMode.LAND
+    #   self.tune_start = None
 
-      # Land
-      if self.status.nav_state != VehicleStatus.NAVIGATION_STATE_AUTO_LAND:
-        self.land()
+    # elif self.mode == MavMode.LAND:
+    #   # Dis-armed?
+    #   if self.status.arming_state == VehicleStatus.ARMING_STATE_DISARMED:
+    #     self.stop_node()
+    #     return
 
-  # def execute_position_control_test(self):
-  #   # Start tune timestamp
-  #   if self.tune_start is None:
-  #     self.tune_start = self.ts
+    #   # Land
+    #   if self.status.nav_state != VehicleStatus.NAVIGATION_STATE_AUTO_LAND:
+    #     self.land()
 
-  #   # Process variables
-  #   pos_pv = [self.pos[0], self.pos[1], self.pos[2], self.heading]
-  #   vel_pv = [self.vel[0], self.vel[1], self.vel[2], self.heading]
+  def test_position_control(self):
+    # Start tune timestamp
+    if self.tune_start is None:
+      self.tune_start = self.ts
 
-  #   if self.mode == MavMode.START:
-  #     # Start hover timer
-  #     if self.hover_start is None:
-  #       self.hover_start = self.ts
+    # Process variables
+    if self.pos is None or self.vel is None:
+      return
+    pos_pv = [self.pos[0], self.pos[1], self.pos[2], self.heading]
+    vel_pv = [self.vel[0], self.vel[1], self.vel[2], self.heading]
 
-  #     # Get hover point
-  #     self.pos_sp = [0.0, 0.0, self.takeoff_height, self.yaw_sp]
+    # self.pos_sp = [0.0, 0.0, self.takeoff_height, self.yaw_sp]
+    vel_sp = self.pos_ctrl.update(self.pos_sp, pos_pv, self.dt)
+    u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
+    self.pub_attitude_sp(u[0], u[1], u[2], u[3])
 
-  #     # Update position controller
-  #     vel_sp = self.pos_ctrl.update(self.pos_sp, pos_pv, self.dt)
-  #     u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
-  #     self.pub_attitude_sp(u[0], u[1], u[2], u[3])
+    # if self.mode == MavMode.START:
+    #   # Start hover timer
+    #   if self.hover_start is None:
+    #     self.hover_start = self.ts
 
-  #     # Transition to land?
-  #     hover_time = float(self.ts - self.hover_start) * 1e-9
-  #     dx = self.pos[0] - self.pos_sp[0]
-  #     dy = self.pos[1] - self.pos_sp[1]
-  #     dz = self.pos[2] - self.pos_sp[2]
-  #     dpos = np.sqrt(dx * dx + dy * dy + dz * dz)
-  #     dyaw = np.fabs(self.heading - self.yaw_sp)
-  #     if dpos < 0.2 and dyaw < np.deg2rad(10.0) and hover_time > 3.0:
-  #       self.get_logger().info('TRANSITION TO TUNE!')
-  #       self.mode = MavMode.TUNE
-  #       self.hover_start = None
+    #   # Get hover point
+    #   self.pos_sp = [0.0, 0.0, self.takeoff_height, self.yaw_sp]
 
-  #   elif self.mode == MavMode.TUNE:
-  #     # Position controller
-  #     self.pos_sp = self.pos_tune_setpoints[0]
-  #     vel_sp = self.pos_ctrl.update(self.pos_sp, pos_pv, self.dt)
-  #     u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
-  #     self.pub_attitude_sp(u[0], u[1], u[2], u[3])
+    #   # Update position controller
+    #   vel_sp = self.pos_ctrl.update(self.pos_sp, pos_pv, self.dt)
+    #   u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
+    #   self.pub_attitude_sp(u[0], u[1], u[2], u[3])
 
-  #     # Check if position setpoint reached
-  #     tune_time = float(self.ts - self.tune_start) * 1e-9
-  #     dx = self.pos[0] - self.pos_sp[0]
-  #     dy = self.pos[1] - self.pos_sp[1]
-  #     dz = self.pos[2] - self.pos_sp[2]
-  #     dpos = np.sqrt(dx * dx + dy * dy + dz * dz)
-  #     if dpos < 0.1 and tune_time >= self.hover_for:
-  #       self.pos_tune_setpoints.pop(0)
-  #       self.tune_start = None
+    #   # Transition to land?
+    #   hover_time = float(self.ts - self.hover_start) * 1e-9
+    #   dx = self.pos[0] - self.pos_sp[0]
+    #   dy = self.pos[1] - self.pos_sp[1]
+    #   dz = self.pos[2] - self.pos_sp[2]
+    #   dpos = np.sqrt(dx * dx + dy * dy + dz * dz)
+    #   dyaw = np.fabs(self.heading - self.yaw_sp)
+    #   if dpos < 0.2 and dyaw < np.deg2rad(10.0) and hover_time > 3.0:
+    #     rospy.loginfo('TRANSITION TO TUNE!')
+    #     self.mode = MavMode.TUNE
+    #     self.hover_start = None
 
-  #     # Land?
-  #     if len(self.pos_tune_setpoints) == 0:
-  #       self.mode = MavMode.LAND
-  #       self.tune_start = None
+    # elif self.mode == MavMode.TUNE:
+    #   # Position controller
+    #   self.pos_sp = self.pos_tune_setpoints[0]
+    #   vel_sp = self.pos_ctrl.update(self.pos_sp, pos_pv, self.dt)
+    #   u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
+    #   self.pub_attitude_sp(u[0], u[1], u[2], u[3])
 
-  #   elif self.mode == MavMode.LAND:
-  #     # Dis-armed?
-  #     if self.status.arming_state == VehicleStatus.ARMING_STATE_DISARMED:
-  #       self.stop_node()
-  #       return
+    #   # Check if position setpoint reached
+    #   tune_time = float(self.ts - self.tune_start) * 1e-9
+    #   dx = self.pos[0] - self.pos_sp[0]
+    #   dy = self.pos[1] - self.pos_sp[1]
+    #   dz = self.pos[2] - self.pos_sp[2]
+    #   dpos = np.sqrt(dx * dx + dy * dy + dz * dz)
+    #   if dpos < 0.1 and tune_time >= self.hover_for:
+    #     self.pos_tune_setpoints.pop(0)
+    #     self.tune_start = None
 
-  #     # Land
-  #     if self.status.nav_state != VehicleStatus.NAVIGATION_STATE_AUTO_LAND:
-  #       self.land()
+    #   # Land?
+    #   if len(self.pos_tune_setpoints) == 0:
+    #     self.mode = MavMode.LAND
+    #     self.tune_start = None
+
+    # elif self.mode == MavMode.LAND:
+    #   # Dis-armed?
+    #   if self.status.arming_state == VehicleStatus.ARMING_STATE_DISARMED:
+    #     self.stop_node()
+    #     return
+
+    #   # Land
+    #   if self.status.nav_state != VehicleStatus.NAVIGATION_STATE_AUTO_LAND:
+    #     self.land()
 
   # def execute_trajectory(self):
   #   # Process variables
@@ -1199,13 +1212,13 @@ class MavNode:
 
   #   # self.mocap_record(self.ts, self.pos, self.vel, self.mocap_pos)
 
-  #   # self.execute_velocity_control_test()
-  #   # self.execute_position_control_test()
+  #   # self.test_velocity_control()
+  #   # self.test_position_control()
   #   self.execute_trajectory()
 
   # def stop_node(self):
   #   """ Stop Node """
-  #   self.get_logger().info('Stopping the node')
+  #   rospy.loginfo('Stopping the node')
   #   self.timer.cancel()
   #   self.destroy_timer(self.timer)
 
@@ -1225,7 +1238,7 @@ class MavNode:
   #            label="Trajectory")
   #   plt.show()
 
-  #   self.get_logger().info('Destroying the node')
+  #   rospy.loginfo('Destroying the node')
   #   self.destroy_node()
   #   self.is_running = False
 
@@ -1245,12 +1258,12 @@ if __name__ == '__main__':
   # pose.pose.position.x = 0
   # pose.pose.position.y = 0
   # pose.pose.position.z = 2
-  # while (not rospy.is_shutdown()):
+  # while rospy.is_shutdown() is False:
   #   node.pub_pos_set.publish(pose)
   #   rate.sleep()
 
-  rate = rospy.Rate(100)
-  while (not rospy.is_shutdown()):
-    node.execute_velocity_control_test()
-    # node.pub_attitude_sp(0.0, 0.0, 0.0, 1.0)
+  rate = rospy.Rate(200)
+  while rospy.is_shutdown() is False:
+    # node.test_velocity_control()
+    node.test_position_control()
     rate.sleep()
