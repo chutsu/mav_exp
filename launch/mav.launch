@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<launch>
+  <include file="$(find mavros)/launch/px4.launch">
+    <arg name="fcu_url" value="udp://:14540@127.0.0.1:14557"/>
+  </include>
+
+  <node pkg="mav_exp"
+    type="mav_node.py"
+    name="mav_node"
+    required="true"
+    output="screen">
+  </node>
+</launch>
