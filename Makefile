@@ -10,10 +10,10 @@ help: ## Help
 install_docker: ## Install Docker (Ubuntu only)
 	@bash scripts/install_docker.bash
 
-build_docker:  ## Build srl_mav_sim docker
+build_docker:  ## Build docker container
 	cd docker && docker build -t mav_exp .
 
-run_docker: ## Run srl_mav_sim docker
+run_docker: ## Run docker container
 	@xhost +local:docker && docker run \
 		-e DISPLAY \
 		-v $(DATA_DIR):$(DATA_DIR) \
@@ -24,6 +24,15 @@ run_docker: ## Run srl_mav_sim docker
 		--ipc=host \
 		--pid=host \
 		--network="host" \
+		-it --rm mav_exp /bin/bash
+
+run_docker_mav: ## Run docker container on the MAV
+	@docker run \
+		--privileged \
+		--ipc=host \
+		--pid=host \
+		--network="host" \
+		--device=/dev/ttyACM0 \
 		-it --rm mav_exp /bin/bash
 
 fix_px4: ## Fix PX4 in gazebo mode
