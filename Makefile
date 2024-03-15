@@ -1,4 +1,3 @@
-DATA_DIR=/data
 SSH_PRIV_KEY=`cat ~/.ssh/id_rsa`
 
 help: ## Help
@@ -16,7 +15,7 @@ build_docker:  ## Build docker container
 run_docker: ## Run docker container
 	@xhost +local:docker && docker run \
 		-e DISPLAY \
-		-v $(DATA_DIR):$(DATA_DIR) \
+		-v $(PWD):/home/docker/catkin_ws/src/mav_exp \
 		-v /dev/bus/usb:/dev/bus/usb --device-cgroup-rule='c 189:* rmw' \
 		-v /dev/shm:/dev/shm \
 		-v /dev/dri:/dev/dri \
