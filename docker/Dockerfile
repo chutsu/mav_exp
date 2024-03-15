@@ -123,15 +123,11 @@ RUN curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linu
   && echo 'export PATH=$PATH:/opt/nvim-linux64/bin' > $HOME/.bashrc
 # -- Install vim and vifm
 RUN apt-get install -qy vim vifm
-# -- Add sane tmux configs
-RUN echo "set -g default-command /bin/bash" >> $HOME/.tmux.conf
-RUN echo "set -g mouse on" >> $HOME/.tmux.conf
-RUN echo "bind-key h select-pane -L" >> $HOME/.tmux.conf
-RUN echo "bind-key j select-pane -D" >> $HOME/.tmux.conf
-RUN echo "bind-key k select-pane -U" >> $HOME/.tmux.conf
-RUN echo "bind-key l select-pane -R" >> $HOME/.tmux.conf
+# -- Install dotfiles
 USER ${USER}
-
+RUN git clone https://github.com/chutsu/dotfiles \
+  && cd dotfiles \
+  && make dotfiles
 
 # Entry point script
 WORKDIR $HOME
