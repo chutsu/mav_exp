@@ -10,7 +10,10 @@ install_docker: ## Install Docker (Ubuntu only)
 	@bash scripts/install_docker.bash
 
 build_docker:  ## Build docker container
-	cd docker && docker build -t mav_exp .
+	@cd docker \
+		&& docker build -t mav_exp \
+			--build-arg UID=`id -u` \
+			--build-arg GID=`id -g` .
 
 run_docker: ## Run docker container
 	@xhost +local:docker && docker run \
@@ -27,6 +30,7 @@ run_docker: ## Run docker container
 
 run_docker_mav: ## Run docker container on the MAV
 	@docker run \
+		-v $(PWD):/home/docker/catkin_ws/src/mav_exp:rw \
 		--privileged \
 		--ipc=host \
 		--pid=host \

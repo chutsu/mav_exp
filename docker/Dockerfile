@@ -7,13 +7,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG ROS_DISTRO=noetic
 
 # Permissions
-RUN apt-get update && apt-get install -y sudo
+ARG UID
+ARG GID
 ARG USER=docker
 ARG PASS=docker
-ARG UID=1000
-ARG GID=1000
 ARG SSH_PRIV_KEY
 RUN useradd -m ${USER} --uid=${UID} && echo "${USER}:${PASS}" | chpasswd
+RUN apt-get update && apt-get install -y sudo
 RUN adduser ${USER} sudo
 ENV HOME /home/$USER
 
