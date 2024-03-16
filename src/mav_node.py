@@ -2,7 +2,6 @@
 import sys
 import math
 import time
-import argparse
 from enum import Enum
 
 import pandas
@@ -709,7 +708,6 @@ class MavNode:
     topic_state = "/mavros/state"
     topic_param_set = "/mavros/param/set"
     topic_pose = "/mavros/local_position/pose"
-    topic_vel = "/mavros/local_position/velocity"
     topic_pos_set = "/mavros/setpoint_position/local"
     topic_att_set = "/mavros/setpoint_raw/attitude"
     topic_mocap = "/vicon/srl_mav/srl_mav"
@@ -724,13 +722,16 @@ class MavNode:
     self.sub_state = rospy.Subscriber(topic_state, State, self.state_cb)
     if self.sim_mode:
       self.sub_pose = rospy.Subscriber(topic_pose, PoseStamped, self.pose_cb)
-      # self.sub_vel = rospy.Subscriber(topic_vel, TwistStamped, self.vel_cb)
     else:
       self.sub_mocap = rospy.Subscriber(topic_mocap, PoseStamped, self.mocap_cb)
 
     # Create publishers
-    self.pub_pos_set = rospy.Publisher(topic_pos_set, PoseStamped, queue_size=10)
-    self.pub_att_set = rospy.Publisher(topic_att_set, AttitudeTarget, queue_size=10)
+    self.pub_pos_set = rospy.Publisher(topic_pos_set,
+                                       PoseStamped,
+                                       queue_size=10)
+    self.pub_att_set = rospy.Publisher(topic_att_set,
+                                       AttitudeTarget,
+                                       queue_size=10)
 
     # State
     self.state = None
@@ -766,11 +767,10 @@ class MavNode:
                                           z=self.takeoff_height,
                                           T=self.traj_period)
     self.yaw_sp = 0.0
-    self.pos_sp = [0.0, 0.0, 2.0, 0.0]
+    self.pos_sp = [0.0, 0.0, 2.0, self.yaw_sp]
 
     # Create a timer to publish control commands
     self.dt = 0.005
-    # self.timer = self.create_timer(self.dt, self.timer_cb)
 
     # Wait until we are connected to the FCU
     rate = rospy.Rate(10)
@@ -786,43 +786,6 @@ class MavNode:
       self.engage_offboard_mode()
       self.arm()
 
-    # Position control tuning waypoints
-    self.vel_tune_setpoints = [
-        # Tune z-axis
-        [0.0, 0.0, 0.0, 0.0],
-        [0.0, 0.0, -0.2, 0.0],
-        [0.0, 0.0, 0.0, 0.0],
-        [0.0, 0.0, +0.2, 0.0],
-        [0.0, 0.0, 0.0, 0.0],
-        # Tune x-axis
-        [0.0, 0.0, 0.0, 0.0],
-        [0.5, 0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 0.0],
-        [-0.5, 0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 0.0],
-        # Tune y-axis
-        [0.0, 0.0, 0.0, 0.0],
-        [0.0, 0.5, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 0.0],
-        [0.0, -0.5, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 0.0]
-    ]
-
-    # Position control tuning waypoints
-    self.pos_tune_setpoints = [
-        # Tune x-axis
-        [0.0, 0.0, self.takeoff_height, 0.0],
-        [1.0, 0.0, self.takeoff_height, 0.0],
-        [-1.0, 0.0, self.takeoff_height, 0.0],
-        [0.0, 0.0, self.takeoff_height, 0.0],
-        # Tune y-axis
-        [0.0, 0.0, self.takeoff_height, 0.0],
-        [0.0, 0.0, self.takeoff_height, 0.0],
-        [0.0, 1.0, self.takeoff_height, 0.0],
-        [0.0, -1.0, self.takeoff_height, 0.0],
-        [0.0, 0.0, self.takeoff_height, 0.0]
-    ]
-
     # Data
     self.pos_time = []
     self.pos_actual = []
@@ -834,7 +797,7 @@ class MavNode:
       self.mocap_csv.close()
 
   def pose_cb(self, msg):
-    """Callback function for msg topic subscriber."""
+    """Pose callback"""
     self.ts = msg.header.stamp.to_nsec()
     dt = float((self.ts - self.ts_prev) * 1e-9) if self.ts_prev else 0.0
     self.ts_prev = self.ts
@@ -849,14 +812,6 @@ class MavNode:
     pos = np.array([rx, ry, rz])
     quat = np.array([qw, qx, qy, qz])
 
-    # self.pos = pos
-    # ypr = quat2euler(quat)
-    # self.heading = ypr[0]
-    # if self.heading > np.pi:
-    #   self.heading -= 2.0 * np.pi
-    # elif self.heading < -np.pi:
-    #   self.heading += 2.0 * np.pi
-
     if self.filter.update(pos, dt):
       self.pos = self.filter.get_position()
       self.vel = self.filter.get_velocity()
@@ -867,13 +822,6 @@ class MavNode:
         self.heading -= 2.0 * np.pi
       elif self.heading < -np.pi:
         self.heading += 2.0 * np.pi
-
-  # def vel_cb(self, msg):
-  #   """ Velocity callback """
-  #   vx = msg.twist.linear.x
-  #   vy = msg.twist.linear.y
-  #   vz = msg.twist.linear.z
-  #   self.vel = np.array([vx, vy, vz])
 
   def mocap_cb(self, msg):
     """Mocap callback"""
@@ -897,14 +845,21 @@ class MavNode:
       self.mocap_pos = pos
       self.mocap_quat = quat
 
-  # def pos_sp_cb(self, msg):
-  #   """Callback function for position setpoint topic subscriber."""
-  #   self.pos_sp = [msg.x, msg.y, msg.z, self.yaw_sp]
+      ypr = quat2euler(quat)
+      self.heading = ypr[0]
+      if self.heading > np.pi:
+        self.heading -= 2.0 * np.pi
+      elif self.heading < -np.pi:
+        self.heading += 2.0 * np.pi
 
-  # def yaw_sp_cb(self, msg):
-  #   """Callback function for yaw setpoint topic subscriber."""
-  #   self.yaw_sp = msg.data
-  #   self.pos_sp[3] = self.yaw_sp
+  def pos_sp_cb(self, msg):
+    """Callback function for position setpoint topic subscriber."""
+    self.pos_sp = [msg.x, msg.y, msg.z, self.yaw_sp]
+
+  def yaw_sp_cb(self, msg):
+    """Callback function for yaw setpoint topic subscriber."""
+    self.yaw_sp = msg.data
+    self.pos_sp[3] = self.yaw_sp
 
   def state_cb(self, msg):
     """Callback function for vehicle_state topic subscriber."""
@@ -974,145 +929,32 @@ class MavNode:
 
   def test_velocity_control(self):
     # Process variables
+    if self.pos is None or self.vel is None:
+      return
     pos_pv = [self.pos[0], self.pos[1], self.pos[2], self.heading]
     vel_pv = [self.vel[0], self.vel[1], self.vel[2], self.heading]
 
-    # if self.mode == MavMode.START:
-    #   # Start hover timer
-    #   if self.hover_start is None:
-    #     self.hover_start = self.ts
-
-    #   # Get hover point
-    #   self.pos_sp = [0.0, 0.0, self.takeoff_height, self.yaw_sp]
-
-    #   # Update position controller
-    #   vel_sp = self.pos_ctrl.update(self.pos_sp, pos_pv, self.dt)
-    #   u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
-    #   self.pub_attitude_sp(u[0], u[1], u[2], u[3])
-
-    #   # Transition to land?
-    #   hover_time = float(self.ts - self.hover_start) * 1e-9
-    #   dx = self.pos[0] - self.pos_sp[0]
-    #   dy = self.pos[1] - self.pos_sp[1]
-    #   dz = self.pos[2] - self.pos_sp[2]
-    #   dpos = np.sqrt(dx * dx + dy * dy + dz * dz)
-    #   dyaw = np.fabs(self.heading - self.yaw_sp)
-    #   if dpos < 0.2 and dyaw < np.deg2rad(10.0) and hover_time > 3.0:
-    #     rospy.loginfo('TRANSITION TO TUNE!')
-    #     self.mode = MavMode.TUNE
-    #     self.hover_start = None
-
-    # elif self.mode == MavMode.TUNE:
-
-    # Start hover timer
-    # if self.tune_start is None:
-    #   self.tune_start = self.ts
-
     # Velocity controller
-    # vel_sp = self.vel_tune_setpoints[0]
-    vel_sp = [0.0, 0.2, +0.2, 0.0]
+    vel_sp = [0.0, 0.0, 0.1, 0.0]
     u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
     self.pub_attitude_sp(u[0], u[1], u[2], u[3])
 
-    # Check if position setpoint reached
-    # tune_time = float(self.ts - self.tune_start) * 1e-9
-    # if tune_time >= 2.0:
-    #   rospy.loginfo('BACK TO START!')
-    #   self.mode = MavMode.START
-    #   self.vel_tune_setpoints.pop(0)
-    #   self.tune_start = None
-    #   self.hover_start = None
-
-    # Land?
-    # if len(self.vel_tune_setpoints) == 0:
-    #   self.mode = MavMode.LAND
-    #   self.tune_start = None
-
-    # elif self.mode == MavMode.LAND:
-    #   # Dis-armed?
-    #   if self.status.arming_state == VehicleStatus.ARMING_STATE_DISARMED:
-    #     self.stop_node()
-    #     return
-
-    #   # Land
-    #   if self.status.nav_state != VehicleStatus.NAVIGATION_STATE_AUTO_LAND:
-    #     self.land()
-
   def test_position_control(self):
-    # Start tune timestamp
-    if self.tune_start is None:
-      self.tune_start = self.ts
-
     # Process variables
     if self.pos is None or self.vel is None:
       return
     pos_pv = [self.pos[0], self.pos[1], self.pos[2], self.heading]
     vel_pv = [self.vel[0], self.vel[1], self.vel[2], self.heading]
 
-    # self.pos_sp = [0.0, 0.0, self.takeoff_height, self.yaw_sp]
+    # Position controller
     vel_sp = self.pos_ctrl.update(self.pos_sp, pos_pv, self.dt)
     u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
     self.pub_attitude_sp(u[0], u[1], u[2], u[3])
 
-    # if self.mode == MavMode.START:
-    #   # Start hover timer
-    #   if self.hover_start is None:
-    #     self.hover_start = self.ts
-
-    #   # Get hover point
-    #   self.pos_sp = [0.0, 0.0, self.takeoff_height, self.yaw_sp]
-
-    #   # Update position controller
-    #   vel_sp = self.pos_ctrl.update(self.pos_sp, pos_pv, self.dt)
-    #   u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
-    #   self.pub_attitude_sp(u[0], u[1], u[2], u[3])
-
-    #   # Transition to land?
-    #   hover_time = float(self.ts - self.hover_start) * 1e-9
-    #   dx = self.pos[0] - self.pos_sp[0]
-    #   dy = self.pos[1] - self.pos_sp[1]
-    #   dz = self.pos[2] - self.pos_sp[2]
-    #   dpos = np.sqrt(dx * dx + dy * dy + dz * dz)
-    #   dyaw = np.fabs(self.heading - self.yaw_sp)
-    #   if dpos < 0.2 and dyaw < np.deg2rad(10.0) and hover_time > 3.0:
-    #     rospy.loginfo('TRANSITION TO TUNE!')
-    #     self.mode = MavMode.TUNE
-    #     self.hover_start = None
-
-    # elif self.mode == MavMode.TUNE:
-    #   # Position controller
-    #   self.pos_sp = self.pos_tune_setpoints[0]
-    #   vel_sp = self.pos_ctrl.update(self.pos_sp, pos_pv, self.dt)
-    #   u = self.vel_ctrl.update(vel_sp, vel_pv, self.dt)
-    #   self.pub_attitude_sp(u[0], u[1], u[2], u[3])
-
-    #   # Check if position setpoint reached
-    #   tune_time = float(self.ts - self.tune_start) * 1e-9
-    #   dx = self.pos[0] - self.pos_sp[0]
-    #   dy = self.pos[1] - self.pos_sp[1]
-    #   dz = self.pos[2] - self.pos_sp[2]
-    #   dpos = np.sqrt(dx * dx + dy * dy + dz * dz)
-    #   if dpos < 0.1 and tune_time >= self.hover_for:
-    #     self.pos_tune_setpoints.pop(0)
-    #     self.tune_start = None
-
-    #   # Land?
-    #   if len(self.pos_tune_setpoints) == 0:
-    #     self.mode = MavMode.LAND
-    #     self.tune_start = None
-
-    # elif self.mode == MavMode.LAND:
-    #   # Dis-armed?
-    #   if self.status.arming_state == VehicleStatus.ARMING_STATE_DISARMED:
-    #     self.stop_node()
-    #     return
-
-    #   # Land
-    #   if self.status.nav_state != VehicleStatus.NAVIGATION_STATE_AUTO_LAND:
-    #     self.land()
-
   # def execute_trajectory(self):
   #   # Process variables
+  #   if self.pos is None or self.vel is None:
+  #     return
   #   pos_pv = [self.pos[0], self.pos[1], self.pos[2], self.heading]
   #   vel_pv = [self.vel[0], self.vel[1], self.vel[2], self.heading]
 
@@ -1191,66 +1033,24 @@ class MavNode:
   #     if self.status.nav_state != VehicleStatus.NAVIGATION_STATE_AUTO_LAND:
   #       self.land()
 
-  # def mocap_record(self, ts, pos_est, vel_est, pos_gnd):
-  #   """ Record mocap filter """
-  #   self.mocap_csv.write(f"{ts},")
-  #   self.mocap_csv.write(f"{pos_est[0]},{pos_est[1]},{pos_est[2]},")
-  #   self.mocap_csv.write(f"{vel_est[0]},{vel_est[1]},{vel_est[2]},")
-  #   self.mocap_csv.write(f"{pos_gnd[0]},{pos_gnd[1]},{pos_gnd[2]}\n")
-
-  # def timer_cb(self):
-  #   """Callback function for the timer."""
-  #   # Check we are receiving position and velocity information
-  #   if self.pos is None or self.vel is None:
-  #     return
-
-  #   # Check MAV is armed and offboard mode activated
-  #   if not self.is_armed():
-  #     return
-  #   if not self.is_offboard():
-  #     return
-
-  #   # self.mocap_record(self.ts, self.pos, self.vel, self.mocap_pos)
-
-  #   # self.test_velocity_control()
-  #   # self.test_position_control()
-  #   self.execute_trajectory()
-
-  # def stop_node(self):
-  #   """ Stop Node """
-  #   rospy.loginfo('Stopping the node')
-  #   self.timer.cancel()
-  #   self.destroy_timer(self.timer)
-
-  #   self.sub_pos.destroy()
-  #   self.sub_pos_sp.destroy()
-  #   self.sub_yaw_sp.destroy()
-  #   self.sub_status.destroy()
-
-  #   self.pos_time = np.array(self.pos_time)
-  #   self.pos_actual = np.array(self.pos_actual)
-  #   self.pos_traj = np.array(self.pos_traj)
-
-  #   plt.plot(self.pos_actual[:, 0], self.pos_actual[:, 1], "r-", label="Actual")
-  #   plt.plot(self.pos_traj[:, 0],
-  #            self.pos_traj[:, 1],
-  #            "k--",
-  #            label="Trajectory")
-  #   plt.show()
-
-  #   rospy.loginfo('Destroying the node')
-  #   self.destroy_node()
-  #   self.is_running = False
+  def mocap_record(self):
+    """ Record mocap filter """
+    ts = self.ts
+    pos_est = self.pos
+    vel_est = self.vel
+    pos_gnd = self.mocap_pos
+    self.mocap_csv.write(f"{ts},")
+    self.mocap_csv.write(f"{pos_est[0]},{pos_est[1]},{pos_est[2]},")
+    self.mocap_csv.write(f"{vel_est[0]},{vel_est[1]},{vel_est[2]},")
+    self.mocap_csv.write(f"{pos_gnd[0]},{pos_gnd[1]},{pos_gnd[2]}\n")
 
 
 if __name__ == '__main__':
-  parser = argparse.ArgumentParser()
-  parser.add_argument("--sim_mode", default=True)
-  args = parser.parse_args()
+  sim_mode = True
 
   # Run Mav Node
   rospy.init_node("mav_node")
-  node = MavNode(sim_mode=args.sim_mode)
+  node = MavNode(sim_mode=sim_mode)
 
   # rospy.loginfo("Sending position setpoint!")
   # rate = rospy.Rate(20)
@@ -1264,6 +1064,8 @@ if __name__ == '__main__':
 
   rate = rospy.Rate(200)
   while rospy.is_shutdown() is False:
-    # node.test_velocity_control()
-    node.test_position_control()
+    if node.is_armed() and node.is_offboard():
+      node.test_velocity_control()
+      # node.test_position_control()
+      node.mocap_record()
     rate.sleep()
